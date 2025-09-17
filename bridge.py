@@ -1,3 +1,4 @@
+from time import time
 import discord
 from discord import app_commands
 import os
@@ -19,10 +20,9 @@ class MyClient(discord.Client):
         self.tree = app_commands.CommandTree(self)
 
     async def setup_hook(self):
-        # Force sync commands to all guilds
-        for guild in self.guilds:
-            await self.tree.sync(guild=guild)
-        print("Slash commands synced to all guilds.")
+        await self.tree.sync()
+        # await client.tree.sync(guild=discord.Object(id=717184117170634773))
+        print("Slash commands globally synced.")
 
 client = MyClient()
 
@@ -202,10 +202,22 @@ async def join(interaction: discord.Interaction):
     if voice_state is None or voice_state.channel is None:
         await interaction.response.send_message("You are not currently in a voice channel.", ephemeral=True)
         return
-    channel = voice_state.channel
+    # Check if bot is already connected to a voice channel in this guild
+    voice_client = discord.utils.get(client.voice_clients, guild=interaction.guild)
+    if voice_client and voice_client.is_connected():
+        if voice_client.channel == voice_state.channel:
+            await interaction.response.send_message(f"I'm already in {voice_state.channel.mention}.", ephemeral=True)
+            return
+        try:
+            await voice_client.move_to(voice_state.channel)
+            await interaction.response.send_message(f"Moved to voice channel: {voice_state.channel.mention}", ephemeral=True)
+        except Exception as e:
+            await interaction.response.send_message(f"Unable to move to voice channel: {e}", ephemeral=True)
+        return
+    # Not connected, so connect
     try:
-        await channel.connect()
-        await interaction.response.send_message(f"Joined voice channel: {channel.mention}")
+        await voice_state.channel.connect()
+        await interaction.response.send_message(f"Joined voice channel: {voice_state.channel.mention}", ephemeral=True)
     except Exception as e:
         await interaction.response.send_message(f"Unable to join voice channel: {e}", ephemeral=True)
 
@@ -235,12 +247,18 @@ def get_voice_client(guild):
 
 async def play_tts(guild, text):
     voice_client = get_voice_client(guild)
-    if voice_client and voice_client.is_connected():
-        with tempfile.NamedTemporaryFile(delete=True, suffix=".mp3") as fp:
-            tts = gTTS(text=text, lang='en')
-            tts.save(fp.name)
-            audio_source = discord.FFmpegPCMAudio(fp.name)
-            if not voice_client.is_playing():
-                voice_client.play(audio_source)
+    if isinstance(voice_client, discord.VoiceClient) and voice_client.is_connected():
+        temp_dir = os.path.join(os.path.dirname(__file__), "temp")
+        os.makedirs(temp_dir, exist_ok=True)
+        temp_path = os.path.join(temp_dir, "tts.mp3")
+        tts = gTTS(text=text, lang='en')
+        tts.save(temp_path)
+        audio_source = discord.FFmpegPCMAudio(temp_path)
+        if not voice_client.is_playing():
+            voice_client.play(audio_source)
+        # Optionally, clean up the file after playback
+        # import time
+        time.sleep(10)  # Wait for playback to start
+        os.remove(temp_path)
 
 client.run(TOKEN)
