@@ -169,7 +169,7 @@ async def start(interaction: discord.Interaction, video_id: str):
                                     try:
                                         await channel.send(f"**{author}:** {message}")
                                         # TTS only if bot is in a voice channel
-                                        await play_tts(interaction.guild, f"{author} says {message}")
+                                        await enqueue_tts(interaction.guild, f"{author} says {message}")
                                     except Exception as e:
                                         print(f"Failed to send message: {e}")
                         else:
@@ -245,20 +245,32 @@ def get_live_chat_messages(youtube, live_chat_id, page_token=None):
 def get_voice_client(guild):
     return discord.utils.get(client.voice_clients, guild=guild)
 
-async def play_tts(guild, text):
+# TTS queue per guild
+TTS_QUEUES = {}
+
+async def tts_worker(guild):
     voice_client = get_voice_client(guild)
-    if isinstance(voice_client, discord.VoiceClient) and voice_client.is_connected():
-        temp_dir = os.path.join(os.path.dirname(__file__), "temp")
-        os.makedirs(temp_dir, exist_ok=True)
-        temp_path = os.path.join(temp_dir, "tts.mp3")
-        tts = gTTS(text=text, lang='en')
-        tts.save(temp_path)
-        audio_source = discord.FFmpegPCMAudio(temp_path)
-        if not voice_client.is_playing():
+    if not voice_client or not voice_client.is_connected():
+        return
+    queue = TTS_QUEUES.setdefault(guild.id, asyncio.Queue())
+    while True:
+        text = await queue.get()
+        with tempfile.NamedTemporaryFile(delete=True, suffix=".mp3") as fp:
+            tts = gTTS(text=text, lang='en')
+            tts.save(fp.name)
+            audio_source = discord.FFmpegPCMAudio(fp.name)
+            while voice_client.is_playing():
+                await asyncio.sleep(0.5)
             voice_client.play(audio_source)
-        # Optionally, clean up the file after playback
-        # import time
-        time.sleep(10)  # Wait for playback to start
-        os.remove(temp_path)
+            while voice_client.is_playing():
+                await asyncio.sleep(0.5)
+        queue.task_done()
+
+async def enqueue_tts(guild, text):
+    queue = TTS_QUEUES.setdefault(guild.id, asyncio.Queue())
+    await queue.put(text)
+    # Start worker if not already running
+    if not hasattr(queue, "worker") or not queue.worker or queue.worker.done():
+        queue.worker = asyncio.create_task(tts_worker(guild))
 
 client.run(TOKEN)

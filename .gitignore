@@ -1,3 +1,5 @@
 .env
 venv/
 guild_channels.json
+test.py
+*.mp3
