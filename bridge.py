@@ -6,6 +6,8 @@ import asyncio
 import json
 import re
 from dotenv import load_dotenv
+from gtts import gTTS
+import tempfile
 
 load_dotenv()
 TOKEN = os.getenv('DISCORD_TOKEN')
@@ -166,6 +168,8 @@ async def start(interaction: discord.Interaction, video_id: str):
                                 if channel:
                                     try:
                                         await channel.send(f"**{author}:** {message}")
+                                        # TTS only if bot is in a voice channel
+                                        await play_tts(interaction.guild, f"{author} says {message}")
                                     except Exception as e:
                                         print(f"Failed to send message: {e}")
                         else:
@@ -182,6 +186,28 @@ async def start(interaction: discord.Interaction, video_id: str):
             "The requested video could not be found or is not a valid YouTube live stream.",
             ephemeral=True
         )
+
+# Command to make the bot join your current voice channel
+@client.tree.command(name="join", description="Make the bot join your current voice channel")
+async def join(interaction: discord.Interaction):
+    if not await moderator_check(interaction):
+        return
+    member = interaction.user
+    if not isinstance(member, discord.Member):
+        member = interaction.guild.get_member(interaction.user.id)
+    if member is None:
+        await interaction.response.send_message("Could not find your member object.", ephemeral=True)
+        return
+    voice_state = member.voice
+    if voice_state is None or voice_state.channel is None:
+        await interaction.response.send_message("You are not currently in a voice channel.", ephemeral=True)
+        return
+    channel = voice_state.channel
+    try:
+        await channel.connect()
+        await interaction.response.send_message(f"Joined voice channel: {channel.mention}")
+    except Exception as e:
+        await interaction.response.send_message(f"Unable to join voice channel: {e}", ephemeral=True)
 
 # Retrieve live chat ID from video ID
 def get_live_chat_id(youtube, video_id):
@@ -202,5 +228,19 @@ def get_live_chat_messages(youtube, live_chat_id, page_token=None):
         pageToken=page_token
     ).execute()
     return response
+
+# Helper to get current voice client for a guild
+def get_voice_client(guild):
+    return discord.utils.get(client.voice_clients, guild=guild)
+
+async def play_tts(guild, text):
+    voice_client = get_voice_client(guild)
+    if voice_client and voice_client.is_connected():
+        with tempfile.NamedTemporaryFile(delete=True, suffix=".mp3") as fp:
+            tts = gTTS(text=text, lang='en')
+            tts.save(fp.name)
+            audio_source = discord.FFmpegPCMAudio(fp.name)
+            if not voice_client.is_playing():
+                voice_client.play(audio_source)
 
 client.run(TOKEN)
